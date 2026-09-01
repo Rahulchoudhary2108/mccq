@@ -375,6 +375,28 @@
   .review-opt .tag{font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.04em;opacity:0.75;}
   .review-opt.unanswered{background:var(--paper);border:1px dashed var(--line-strong);color:var(--ink-soft);}
 
+  .explanation{
+    margin-top:10px;
+    padding:12px 14px;
+    background:var(--paper);
+    border-left:3px solid var(--ink);
+    border-radius:0 var(--radius) var(--radius) 0;
+  }
+  .explanation-label{
+    display:block;
+    font-size:10.5px;
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    color:var(--ink-soft);
+    margin-bottom:5px;
+  }
+  .explanation p{
+    margin:0;
+    font-size:14px;
+    line-height:1.55;
+    color:var(--ink);
+  }
+
   /* --- appreciation banner --- */
   .appreciate{
     margin-top:16px;
@@ -490,8 +512,8 @@ A) Hyper Trainer Marking Language
 B) Hyper Text Markup Language*
 C) Hyper Text Marketing Language
 D) None of these</pre>
-          <p>No asterisk? Add a line like <span class="mono">Answer: B</span> or <span class="mono">Ans: B</span> at the end of the block instead — both work.</p>
-          <p>Prefer spreadsheets? A CSV with columns <span class="mono">Question,OptionA,OptionB,OptionC,OptionD,Answer</span> is also auto-detected on upload.</p>
+          <p>No asterisk? Add a line like <span class="mono">Answer: B</span> or <span class="mono">Ans: B</span> at the end of the block instead — both work. Add a line like <span class="mono">Explanation: ...</span> to show why an answer is correct on the results screen.</p>
+          <p>Prefer spreadsheets? A CSV or sheet with columns <span class="mono">Question, Option A, Option B, Option C, Option D, Explanation</span> works too — mark the correct option with <span class="mono">*</span> right inside its cell (e.g. <span class="mono">Paris*</span>), same as the plain-text format. An <span class="mono">Answer</span> column with a letter also works if you'd rather not use asterisks. Any extra columns, like a question number, are ignored automatically.</p>
           <p><strong>Bulk-pasting into your Google Sheet:</strong> select cell A1, then paste the whole formatted text (like the box above) in one go — Sheets automatically drops each line into its own row down column A, blank rows and all. No separate columns to fill in per question.</p>
         </div>
       </details>
@@ -762,14 +784,18 @@ The Great Wall is located in which country?
 
     const optionRe = /^[\(\[]?([A-Za-z0-9])[\)\.\]]\s*(.+)$/;
     const answerLineRe = /^(answer|ans)\s*[:\-]\s*([A-Za-z0-9]+)\s*$/i;
+    const explanationLineRe = /^(explanation|exp|why)\s*[:\-]\s*(.+)$/i;
 
     blocks.forEach((block, bi) => {
       const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
       let qLines = [];
       let opts = [];
       let answerLetter = null;
+      let explanationLines = [];
 
       lines.forEach(line => {
+        const em = line.match(explanationLineRe);
+        if (em) { explanationLines.push(em[2].trim()); return; }
         const am = line.match(answerLineRe);
         if (am) { answerLetter = am[2].trim().toUpperCase(); return; }
         const om = line.match(optionRe);
@@ -804,7 +830,7 @@ The Great Wall is located in which country?
       // strip leading numbering like "1." or "Q3)" from question text
       let qText = qLines.join(' ').replace(/^\s*(Q\.?\s*)?\d+[\.\)]\s*/i, '').trim();
 
-      questions.push({ question: qText, options: opts, correctIndex });
+      questions.push({ question: qText, options: opts, correctIndex, explanation: explanationLines.join(' ') });
     });
 
     return { questions, errors };
@@ -847,6 +873,7 @@ The Great Wall is located in which country?
 
     const qi = header.findIndex(h=>h.includes('question'));
     const ai = header.findIndex(h=>h.includes('answer'));
+    const ei = header.findIndex(h=>h.includes('explanation') || h.includes('solution') || h.includes('reason'));
     const optIdxs = header.map((h,i)=> (h.includes('option') ? i : -1)).filter(i=>i!==-1);
 
     const questions = [], errors = [];
@@ -854,15 +881,27 @@ The Great Wall is located in which country?
       const row = rows[r];
       if (!row || row.every(f=>f.trim()==='')) continue;
       const question = (row[qi]||'').trim();
-      const opts = optIdxs.map(i => (row[i]||'').trim()).filter(o=>o!=='');
-      const ansRaw = (row[ai]||'').trim();
+      let opts = optIdxs.map(i => (row[i]||'').trim()).filter(o=>o!=='');
+      const explanation = (ei >= 0 ? (row[ei]||'').trim() : '');
       if (!question || opts.length < 2){ errors.push(`Row ${r+1}: missing question or options — skipped.`); continue; }
+
+      // Primary: an asterisk marking the correct option, right in the cell (e.g. "Paris*")
       let correctIndex = -1;
-      if (/^[A-Za-z]$/.test(ansRaw)) correctIndex = ansRaw.toUpperCase().charCodeAt(0) - 65;
-      else if (/^\d+$/.test(ansRaw)) correctIndex = parseInt(ansRaw,10) - 1;
-      else correctIndex = opts.findIndex(o => o.toLowerCase() === ansRaw.toLowerCase());
-      if (correctIndex < 0 || correctIndex >= opts.length){ errors.push(`Row ${r+1}: answer "${ansRaw}" doesn't match an option — skipped.`); continue; }
-      questions.push({ question, options: opts, correctIndex });
+      opts = opts.map((opt, i) => {
+        if (/\*\s*$/.test(opt)){ correctIndex = i; opt = opt.replace(/\*\s*$/, '').trim(); }
+        return opt;
+      });
+
+      // Fallback: a separate Answer column with a letter, number, or the option's own text
+      if (correctIndex === -1){
+        const ansRaw = (row[ai]||'').trim();
+        if (/^[A-Za-z]$/.test(ansRaw)) correctIndex = ansRaw.toUpperCase().charCodeAt(0) - 65;
+        else if (/^\d+$/.test(ansRaw)) correctIndex = parseInt(ansRaw,10) - 1;
+        else if (ansRaw) correctIndex = opts.findIndex(o => o.toLowerCase() === ansRaw.toLowerCase());
+      }
+
+      if (correctIndex < 0 || correctIndex >= opts.length){ errors.push(`Row ${r+1}: no correct answer found (mark one option with * or fill the Answer column) — skipped.`); continue; }
+      questions.push({ question, options: opts, correctIndex, explanation });
     }
     return { questions, errors };
   }
@@ -985,7 +1024,7 @@ The Great Wall is located in which country?
     testSet = chosen.map(q => {
       let opts = q.options.map((text, i) => ({ text, isCorrect: i === q.correctIndex }));
       if (chkShuffleOpt.checked) opts = shuffle(opts);
-      return { question: q.question, options: opts };
+      return { question: q.question, options: opts, explanation: q.explanation || '' };
     });
 
     answers = {};
@@ -1121,7 +1160,11 @@ The Great Wall is located in which country?
       if (sel === undefined){
         optsHtml += `<div class="review-opt unanswered"><span>No answer selected</span></div>`;
       }
-      item.innerHTML = `<p class="qtext">${i+1}. ${escapeHtml(q.question)}</p>${optsHtml}`;
+      let explHtml = '';
+      if (q.explanation && q.explanation.trim()){
+        explHtml = `<div class="explanation"><span class="explanation-label mono">Why</span><p>${escapeHtml(q.explanation.trim())}</p></div>`;
+      }
+      item.innerHTML = `<p class="qtext">${i+1}. ${escapeHtml(q.question)}</p>${optsHtml}${explHtml}`;
       reviewList.appendChild(item);
     });
 
@@ -1226,6 +1269,7 @@ The Great Wall is located in which country?
       q.options.forEach((opt, oi) => {
         out += `   ${String.fromCharCode(65+oi)}. ${opt.text}${opt.isCorrect ? '  [correct]' : ''}${sel===oi ? '  <- your answer' : ''}\n`;
       });
+      if (q.explanation && q.explanation.trim()) out += `   Why: ${q.explanation.trim()}\n`;
       out += '\n';
     });
     const blob = new Blob([out], {type:'text/plain'});
@@ -1238,7 +1282,7 @@ The Great Wall is located in which country?
   retryBtn.addEventListener('click', () => {
     answers = {};
     currentIndex = 0;
-    testSet = testSet.map(q => ({ question: q.question, options: shuffleIfNeeded(q.options) }));
+    testSet = testSet.map(q => ({ question: q.question, options: shuffleIfNeeded(q.options), explanation: q.explanation }));
     const mins = parseInt(timeLimitInput.value, 10) || 0;
     if (mins > 0){ timerMode='down'; timerSeconds = mins*60; } else { timerMode='up'; timerSeconds = 0; }
     testStartTime = Date.now();
