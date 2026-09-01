@@ -492,6 +492,7 @@ C) Hyper Text Marketing Language
 D) None of these</pre>
           <p>No asterisk? Add a line like <span class="mono">Answer: B</span> or <span class="mono">Ans: B</span> at the end of the block instead — both work.</p>
           <p>Prefer spreadsheets? A CSV with columns <span class="mono">Question,OptionA,OptionB,OptionC,OptionD,Answer</span> is also auto-detected on upload.</p>
+          <p><strong>Bulk-pasting into your Google Sheet:</strong> select cell A1, then paste the whole formatted text (like the box above) in one go — Sheets automatically drops each line into its own row down column A, blank rows and all. No separate columns to fill in per question.</p>
         </div>
       </details>
     </div>
@@ -809,7 +810,7 @@ The Great Wall is located in which country?
     return { questions, errors };
   }
 
-  function parseCSV(text){
+  function splitCSVRows(text){
     // minimal CSV parser handling quoted fields with commas
     const rows = [];
     let row = [], field = '', inQuotes = false;
@@ -832,6 +833,11 @@ The Great Wall is located in which country?
       }
     }
     if (field.length || row.length){ row.push(field); if (row.some(f=>f.trim()!=='')) rows.push(row); }
+    return rows;
+  }
+
+  function parseCSV(text){
+    const rows = splitCSVRows(text);
     if (rows.length === 0) return { questions:[], errors:['CSV appears empty.'] };
 
     let header = rows[0].map(h => h.trim().toLowerCase());
@@ -862,6 +868,17 @@ The Great Wall is located in which country?
   }
 
   function parseBank(text){
+    // If the sheet/CSV only has a single column, this is a plain-text bank
+    // where each line was pasted into its own row (Sheets does this automatically).
+    // Reconstruct the original multi-line text and parse it the normal way —
+    // this also correctly un-escapes any quotes/commas the sheet export added.
+    const rawRows = splitCSVRows(text);
+    if (rawRows.length > 0 && rawRows.every(r => r.length === 1)){
+      const reconstructed = rawRows.map(r => r[0]).join('\n');
+      const plain = parsePlainText(reconstructed);
+      if (plain.questions.length > 0) return plain;
+    }
+
     if (/,/.test(text.split('\n')[0]) && /question/i.test(text.split('\n')[0])){
       return parseCSV(text);
     }
